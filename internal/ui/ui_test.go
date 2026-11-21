@@ -74,10 +74,10 @@ func (h *harness) click(x, y float32, buttons pointer.Buttons, mods key.Modifier
 // Layout at 1 px/dp: sidebar 232 wide, toolbar 64 high, batch row 46,
 // task rows 52 each.
 const (
-	listX   = 232 + 400
-	batchY  = 64 + 23
-	task0Y  = 64 + 46 + 26
-	task1Y  = task0Y + 52
+	listX  = 232 + 400
+	batchY = 64 + 23
+	task0Y = 64 + 46 + 26
+	task1Y = task0Y + 52
 )
 
 func TestClickSelectsRowAndShowsSelectionBar(t *testing.T) {
