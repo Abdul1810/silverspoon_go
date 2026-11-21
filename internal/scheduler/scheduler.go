@@ -317,8 +317,14 @@ func AppendReport(sum Summary, path string) bool {
 	return err == nil
 }
 
+// ReportFile overrides ReportPath when set (tests).
+var ReportFile = ""
+
 // ReportPath is ~/.silverspoon_offpeak_report.jsonl.
 func ReportPath() string {
+	if ReportFile != "" {
+		return ReportFile
+	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".silverspoon_offpeak_report.jsonl")
 }
