@@ -66,7 +66,9 @@ type App struct {
 	nets        *netmon.Monitor
 	netBtns     map[string]*widget.Clickable
 	hoverNet    *netmon.Net
-	logo        paint.ImageOp
+	// addSheetLinks reads the open Add sheet's links box (tests).
+	addSheetLinks func() string
+	logo          paint.ImageOp
 
 	menu     *Menu
 	dialogs  []*Dialog

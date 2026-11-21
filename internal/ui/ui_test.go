@@ -2,6 +2,8 @@ package ui
 
 import (
 	"image"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -157,3 +159,36 @@ func TestHostSummaryAndMeta(t *testing.T) {
 		t.Error("taskView mapping")
 	}
 }
+
+// TestLiveFolderExpandsInAddSheet opens the sheet with a real DataNodes
+// folder link and waits for it to turn into file links (reads the page
+// only): SILVERSPOON_LIVE_FOLDER=<url> go test -run LiveFolder ./internal/ui
+func TestLiveFolderExpandsInAddSheet(t *testing.T) {
+	link := os.Getenv("SILVERSPOON_LIVE_FOLDER")
+	if link == "" {
+		t.Skip("set SILVERSPOON_LIVE_FOLDER")
+	}
+	h := newHarness(t)
+	h.a.openAddSheet(link)
+	var body string
+	for i := 0; i < 200; i++ {
+		h.frame()
+		time.Sleep(50 * time.Millisecond)
+		if len(h.a.dialogs) == 0 {
+			t.Fatal("sheet closed")
+		}
+		body = sheetLinks(h)
+		if !strings.Contains(body, "/f/") && strings.Count(body, "\n") > 0 {
+			break
+		}
+	}
+	lines := strings.Split(strings.TrimSpace(body), "\n")
+	t.Logf("%d links, first %s, last %s", len(lines), lines[0], lines[len(lines)-1])
+	if len(lines) < 2 || strings.Contains(body, "/f/") {
+		t.Fatalf("folder not expanded:\n%s", body)
+	}
+}
+
+// sheetLinks returns the Add sheet's links text by rendering its body and
+// reading the first editor laid out (the links box).
+func sheetLinks(h *harness) string { return h.a.addSheetLinks() }

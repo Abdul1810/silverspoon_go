@@ -595,6 +595,7 @@ func (a *App) layoutStatusBar(gtx C) D {
 func (a *App) openAddSheet(initial string) {
 	th := a.th
 	var links, dir, folder widget.Editor
+	a.addSheetLinks = links.Text
 	dir.SingleLine, folder.SingleLine, folder.Submit = true, true, true
 	dir.SetText(a.Settings().DefaultSaveDir)
 	if a.lastSaveDir != "" {
@@ -608,6 +609,34 @@ func (a *App) openAddSheet(initial string) {
 	folderEdited := false
 	lastSuggest := ""
 	focused := false
+
+	// Folder links (a DataNodes /f/ page listing many files) are read in the
+	// background and replaced by their file links.
+	expanding := map[string]bool{}
+	failed := map[string]string{}
+	expandedNote := ""
+	expand := func(link string) {
+		expanding[link] = true
+		go func() {
+			files, err := providers.ExpandFolder(link, nil)
+			a.post(func() {
+				delete(expanding, link)
+				if err != nil {
+					failed[link] = FormatErr(err)
+					return
+				}
+				lines := strings.Split(links.Text(), "\n")
+				for i, l := range lines {
+					if strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(l), "- ")) == link {
+						lines[i] = strings.Join(files, "\n")
+					}
+				}
+				links.SetText(strings.Join(lines, "\n"))
+				links.SetCaret(links.Len(), links.Len())
+				expandedNote = fmt.Sprintf("Folder expanded into %d files", len(files))
+			})
+		}()
+	}
 
 	appendText := func(txt string) {
 		if txt == "" {
@@ -628,6 +657,17 @@ func (a *App) openAddSheet(initial string) {
 		if len(ls) == 0 {
 			a.message("No links", "Paste at least one http(s) link.")
 			return false
+		}
+		if len(expanding) > 0 {
+			a.message("Reading folder", "Still collecting the files from the folder link. Try again in a moment.")
+			return false
+		}
+		for _, l := range ls {
+			if providers.IsFolderLink(l) {
+				a.message("Folder link not read", "Could not list the files in\n"+l+"\n\n"+failed[l]+
+					"\n\nRemove it, or paste its file links instead.")
+				return false
+			}
 		}
 		if name == "" {
 			a.message("Folder name needed", "Enter a folder name for these files.")
@@ -693,8 +733,18 @@ func (a *App) openAddSheet(initial string) {
 			}
 		}
 		ls := engine.ParseLinks(links.Text())
-		if !folderEdited && len(ls) > 0 {
-			if s := engine.SuggestFolder(ls[0]); s != folder.Text() {
+		var fileLinks []string
+		for _, l := range ls {
+			if providers.IsFolderLink(l) {
+				if !expanding[l] && failed[l] == "" {
+					expand(l)
+				}
+				continue
+			}
+			fileLinks = append(fileLinks, l)
+		}
+		if !folderEdited && len(fileLinks) > 0 {
+			if s := engine.SuggestFolder(fileLinks[0]); s != folder.Text() {
 				lastSuggest = s
 				folder.SetText(s)
 			}
@@ -703,7 +753,7 @@ func (a *App) openAddSheet(initial string) {
 			gtx.Execute(key.FocusCmd{Tag: &links})
 			focused = true
 		}
-		hosts := hostSummary(ls)
+		hosts := hostSummary(fileLinks)
 		label := func(txt string) layout.FlexChild {
 			return layout.Rigid(func(gtx C) D {
 				return layout.Inset{Bottom: unit.Dp(6)}.Layout(gtx, th.Label(unit.Sp(12), txt, th.P.TextMuted).Layout)
@@ -712,7 +762,7 @@ func (a *App) openAddSheet(initial string) {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			label("Links"),
 			layout.Rigid(func(gtx C) D {
-				return th.Field(gtx, &links, "Paste FuckingFast, DataNodes, FileKeeper, BZZHR or any direct download links — one per line", 150)
+				return th.Field(gtx, &links, "Paste FuckingFast, DataNodes (files or folders), FileKeeper, BZZHR or direct links — one per line", 150)
 			}),
 			layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
 			layout.Rigid(func(gtx C) D {
@@ -723,12 +773,20 @@ func (a *App) openAddSheet(initial string) {
 					layout.Flexed(1, func(gtx C) D {
 						txt := "No links yet"
 						col := th.P.TextSubtle
-						if len(ls) > 0 {
-							txt = fmt.Sprintf("%d link(s) detected", len(ls))
+						if len(fileLinks) > 0 {
+							txt = fmt.Sprintf("%d link(s) detected", len(fileLinks))
 							if hosts != "" {
 								txt += "  ·  " + hosts
 							}
 							col = th.P.Success
+						}
+						switch {
+						case len(expanding) > 0:
+							txt, col = fmt.Sprintf("Reading %d folder link(s)…", len(expanding)), th.P.Info
+						case len(failed) > 0 && anyFolder(ls):
+							txt, col = "Couldn't read a folder link", th.P.Danger
+						case expandedNote != "" && len(fileLinks) > 0:
+							txt = expandedNote + "  ·  " + hosts
 						}
 						return th.Ellipsized(gtx, txt, unit.Sp(12), col, font.Medium, text.End)
 					}),
@@ -786,3 +844,15 @@ func hostSummary(links []string) string {
 	}
 	return strings.Join(parts, ", ")
 }
+
+func anyFolder(links []string) bool {
+	for _, l := range links {
+		if providers.IsFolderLink(l) {
+			return true
+		}
+	}
+	return false
+}
+
+// FormatErr is a short user-facing error text.
+func FormatErr(err error) string { return engine.FormatError(err) }
