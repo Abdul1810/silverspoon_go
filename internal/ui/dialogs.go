@@ -62,6 +62,7 @@ func (a *App) openSettings() {
 		bw                                      = Stepper{Min: 0, Max: 1000}
 		captcha                                 = Stepper{Min: 5, Max: 120}
 		showSolver, extract, retry, skipConfirm widget.Bool
+		allNets                                 widget.Bool
 		resetWidths, resetWelcome               bool
 	)
 	dir.SingleLine, bind.SingleLine = true, true
@@ -75,6 +76,7 @@ func (a *App) openSettings() {
 		captcha.Set(s.CaptchaTimeout)
 		showSolver.Value, extract.Value = s.ShowSolverBrowser, s.ExtractAfterDownload
 		retry.Value, skipConfirm.Value = s.AutoRetryErrors, s.SkipDeleteConfirmation
+		allNets.Value = s.Bool(KeyAllNetworks, true)
 	}
 	load(s)
 
@@ -112,7 +114,8 @@ func (a *App) openSettings() {
 			a.sectionHeading("Downloads"),
 			a.formRow("Max concurrent downloads", "", func(gtx C) D { return a.th.Stepper(gtx, &workers, "", "") }),
 			a.formRow("Connections per download", "1 turns multi-connection off", func(gtx C) D { return a.th.Stepper(gtx, &conns, "", "") }),
-			a.formRow("Download via IPs (rotate)", "Comma separated; blank = automatic", withButton(field(&bind, "blank = automatic (one network)"), &detect, "Detect")),
+			a.formRow("Multiple networks", "Ethernet, Wi-Fi, USB/phone tethering…", check(&allNets, "Use all connected networks (new ones join mid-download)")),
+			a.formRow("Download via IPs (manual)", "Used when the option above is off", withButton(field(&bind, "e.g. 192.168.1.9, 172.16.60.60"), &detect, "Detect")),
 			a.formRow("Global bandwidth limit", "", func(gtx C) D { return a.th.Stepper(gtx, &bw, "MB/s", "Unlimited") }),
 			a.formRow("Retry failed downloads", "", check(&retry, "Automatically, up to 3 times")),
 			a.sectionHeading("CAPTCHA & Extraction"),
@@ -136,6 +139,7 @@ func (a *App) openSettings() {
 			st.ExtractAfterDownload = extract.Value
 			st.AutoRetryErrors = retry.Value
 			st.SkipDeleteConfirmation = skipConfirm.Value
+			st.SetBool(KeyAllNetworks, allNets.Value)
 			if resetWidths {
 				st.ColumnWidths = map[string]int{}
 			}

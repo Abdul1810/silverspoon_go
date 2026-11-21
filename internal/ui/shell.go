@@ -207,6 +207,15 @@ func (a *App) layoutSidebar(gtx C) D {
 				return a.sh.sidebarList.Layout(gtx, len(children), func(gtx C, i int) D { return children[i](gtx) })
 			})
 		}),
+		// Networks in use, with live bandwidth per network.
+		layout.Rigid(func(gtx C) D {
+			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+				layout.Rigid(func(gtx C) D {
+					return layout.Inset{Left: unit.Dp(8), Right: unit.Dp(8)}.Layout(gtx, th.Divider)
+				}),
+				layout.Rigid(a.layoutNetworks),
+			)
+		}),
 		// Footer.
 		layout.Rigid(func(gtx C) D {
 			return layout.Inset{Left: unit.Dp(8), Right: unit.Dp(8), Bottom: unit.Dp(10)}.Layout(gtx, func(gtx C) D {
@@ -538,6 +547,20 @@ func (a *App) layoutStatusBar(gtx C) D {
 			layout.Rigid(layout.Spacer{Width: unit.Dp(16)}.Layout)}
 	}
 	children := []layout.FlexChild{}
+	if used, online := a.usingNetworks(); online > 0 {
+		label := fmt.Sprintf("%d of %d networks", used, online)
+		if online == 1 {
+			label = "1 network"
+		}
+		children = append(children, layout.Rigid(func(gtx C) D {
+			return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+				layout.Rigid(func(gtx C) D { return IconAt(gtx, icEthernet, th.P.TextMuted, unit.Dp(14)) }),
+				layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
+				layout.Rigid(th.Label(unit.Sp(12), label, th.P.TextMuted).Layout),
+				layout.Rigid(layout.Spacer{Width: unit.Dp(16)}.Layout),
+			)
+		}))
+	}
 	children = append(children, stat(th.P.Info, fmt.Sprintf("%d active", active))...)
 	children = append(children, stat(th.P.TextSubtle, fmt.Sprintf("%d queued", queued))...)
 	children = append(children, stat(th.P.Success, fmt.Sprintf("%d done", done))...)

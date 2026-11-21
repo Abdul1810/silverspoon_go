@@ -20,12 +20,18 @@ var Version = "v2.0.0"
 // Log receives the engine's error lines.
 var Log = slog.Default()
 
+// Meter, when set, counts traffic and connections per network.
+var Meter segmented.Meter
+
 // Config is the part of the settings the engine reads; the app supplies a
 // fresh copy on every call so settings changes apply immediately.
 type Config struct {
 	MaxWorkers     int
 	MaxConnections int
 	BindAddresses  string
+	// Sources, when set, returns the local IPs to spread connections over
+	// right now (all connected networks); it overrides BindAddresses.
+	Sources        func() []string
 	BandwidthLimit int // MB/s, 0 = unlimited
 	AutoRetry      bool
 }

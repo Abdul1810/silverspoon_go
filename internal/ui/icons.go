@@ -47,4 +47,11 @@ var (
 	icInfo      = mustIcon(icons.ActionInfoOutline)
 	icImport    = mustIcon(icons.FileFileUpload)
 	icClear     = mustIcon(icons.CommunicationClearAll)
+
+	icEthernet = mustIcon(icons.ActionSettingsEthernet)
+	icWiFi     = mustIcon(icons.DeviceSignalWiFi4Bar)
+	icTether   = mustIcon(icons.DeviceWiFiTethering)
+	icCellular = mustIcon(icons.DeviceSignalCellular4Bar)
+	icNetOther = mustIcon(icons.HardwareRouter)
+	icNetOff   = mustIcon(icons.DeviceSignalWiFiOff)
 )

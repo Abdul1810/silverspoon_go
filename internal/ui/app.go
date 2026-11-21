@@ -31,6 +31,7 @@ import (
 
 	"silverspoon/assets"
 	"silverspoon/internal/engine"
+	"silverspoon/internal/netmon"
 	"silverspoon/internal/platform"
 	"silverspoon/internal/scheduler"
 	"silverspoon/internal/solver"
@@ -62,6 +63,9 @@ type App struct {
 	sh          *shell
 	autoExtract widget.Bool
 	lastSaveDir string
+	nets        *netmon.Monitor
+	netBtns     map[string]*widget.Clickable
+	hoverNet    *netmon.Net
 	logo        paint.ImageOp
 
 	menu     *Menu
@@ -293,6 +297,14 @@ func (a *App) frame(gtx C) {
 	if len(a.dialogs) == 0 && (a.menu == nil || !a.menu.open) {
 		if tip := a.table.HoverTooltip(); tip != "" {
 			a.th.Tooltip(gtx, a.mouse, a.winSize, tip)
+		} else if n := a.hoverNet; n != nil {
+			var total float64
+			for _, x := range a.nets.Snapshot() {
+				if a.netUsed(x) {
+					total += x.BytesPerSec
+				}
+			}
+			a.th.Tooltip(gtx, a.mouse, a.winSize, networkTooltip(*n, total))
 		}
 	}
 	if a.menu != nil && a.menu.open {

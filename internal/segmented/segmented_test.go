@@ -336,3 +336,59 @@ func TestConnectionsBindToGivenSources(t *testing.T) {
 		t.Fatal("content differs")
 	}
 }
+
+type meter struct {
+	mu    sync.Mutex
+	bytes map[string]int64
+	conns map[string]int
+	peak  map[string]int
+}
+
+func (m *meter) Add(s string, n int) { m.mu.Lock(); m.bytes[s] += int64(n); m.mu.Unlock() }
+func (m *meter) Open(s string) {
+	m.mu.Lock()
+	m.conns[s]++
+	if m.conns[s] > m.peak[s] {
+		m.peak[s] = m.conns[s]
+	}
+	m.mu.Unlock()
+}
+func (m *meter) Close(s string) { m.mu.Lock(); m.conns[s]--; m.mu.Unlock() }
+
+// TestNetworkPluggedInMidDownload starts on one source and adds a second
+// partway through: connections move over without losing bytes, and the
+// meter sees traffic on both.
+func TestNetworkPluggedInMidDownload(t *testing.T) {
+	url, _, stop := serve(serveOpts{perConnRate: 1024 * 1024})
+	defer stop()
+	var mu sync.Mutex
+	srcs := []string{"127.0.0.1"}
+	m := &meter{bytes: map[string]int64{}, conns: map[string]int{}, peak: map[string]int{}}
+	path := filepath.Join(t.TempDir(), "f.bin")
+	go func() {
+		time.Sleep(1500 * time.Millisecond)
+		mu.Lock()
+		srcs = []string{"127.0.0.1", "127.0.0.2"}
+		mu.Unlock()
+	}()
+	ok, err := (&Download{URL: url, Path: path, Total: int64(len(data)), Connections: 4, Meter: m,
+		SourcesFunc: func() []string { mu.Lock(); defer mu.Unlock(); return append([]string(nil), srcs...) }}).Run()
+	if !ok || err != nil {
+		t.Fatalf("%v %v", ok, err)
+	}
+	if !bytes.Equal(readFile(t, path), data) {
+		t.Fatal("content differs")
+	}
+	if m.bytes["127.0.0.2"] == 0 || m.peak["127.0.0.2"] == 0 {
+		t.Errorf("new network unused: %v %v", m.bytes, m.peak)
+	}
+	if m.bytes["127.0.0.1"]+m.bytes["127.0.0.2"] < int64(len(data)) {
+		t.Errorf("meter missed bytes: %v", m.bytes)
+	}
+	for s, c := range m.conns {
+		if c != 0 {
+			t.Errorf("%s left %d open", s, c)
+		}
+	}
+	t.Logf("bytes per network: %v, peak connections: %v", m.bytes, m.peak)
+}

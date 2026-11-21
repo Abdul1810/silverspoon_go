@@ -186,9 +186,14 @@ type Download struct {
 	Opener         Opener
 	// Sources are local IPs to spread connections over (e.g. Wi-Fi + USB tether).
 	Sources []string
+	// SourcesFunc, when set, is asked for the current list instead, so a
+	// network plugged in (or lost) mid-download is picked up.
+	SourcesFunc func() []string
+	// Meter, when set, is told about bytes and connections per source.
+	Meter Meter
 
 	mu        sync.Mutex
-	rotor     int
+	shift     map[int]int // per-worker source offset, bumped after a failure
 	thr       *throttle
 	stop      chan struct{}
 	stopOnce  sync.Once
@@ -323,22 +328,50 @@ func (d *Download) claim(worker int) *segment {
 	return seg
 }
 
-// nextSource round-robins over the local IPs: every new request (including a
-// retry after a failure) leaves from the next one.
-func (d *Download) nextSource() string {
-	if len(d.Sources) == 0 {
+// Meter receives per-source traffic (see netmon.Monitor).
+type Meter interface {
+	Add(source string, n int)
+	Open(source string)
+	Close(source string)
+}
+
+// errSwitchSource ends a fetch so the worker reconnects on the network it
+// is now assigned to; the segment continues from where it stopped.
+var errSwitchSource = errors.New("switching network")
+
+func (d *Download) sources() []string {
+	var in []string
+	if d.SourcesFunc != nil {
+		in = d.SourcesFunc()
+	} else {
+		in = d.Sources
+	}
+	out := in[:0:0]
+	for _, s := range in {
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// sourceFor is the network worker id should use: connections are spread
+// evenly (worker i on source i mod n), and a worker that failed moves on to
+// the next network so one bad link can't stall its segment.
+func (d *Download) sourceFor(id int) string {
+	srcs := d.sources()
+	if len(srcs) == 0 {
 		return ""
 	}
 	d.mu.Lock()
-	defer d.mu.Unlock()
-	src := d.Sources[d.rotor%len(d.Sources)]
-	d.rotor++
-	return src
+	k := d.shift[id]
+	d.mu.Unlock()
+	return srcs[(id+k)%len(srcs)]
 }
 
 // -- workers ---------------------------------------------------------------
 
-func (d *Download) fetch(seg *segment, fh *os.File, source string) error {
+func (d *Download) fetch(seg *segment, fh *os.File, id int, source string) error {
 	d.mu.Lock()
 	rng := fmt.Sprintf("bytes=%d-%d", seg.pos, seg.end-1)
 	startPos := seg.pos
@@ -356,8 +389,21 @@ func (d *Download) fetch(seg *segment, fh *os.File, source string) error {
 	if status != 206 || m == nil || m[1] != strconv.FormatInt(startPos, 10) {
 		return &RangeNotSupportedError{fmt.Sprintf("server answered %d to a range request", status)}
 	}
+	if d.Meter != nil {
+		d.Meter.Open(source)
+		defer d.Meter.Close(source)
+	}
 	buf := make([]byte, Chunk)
+	lastCheck := time.Now()
 	for !d.stopped() {
+		// Four times a second, move to another network if the assignment changed
+		// (a network was plugged in, dropped out or turned off).
+		if time.Since(lastCheck) > 250*time.Millisecond {
+			lastCheck = time.Now()
+			if d.sourceFor(id) != source {
+				return errSwitchSource
+			}
+		}
 		d.mu.Lock()
 		want := seg.remaining()
 		d.mu.Unlock()
@@ -379,6 +425,9 @@ func (d *Download) fetch(seg *segment, fh *os.File, source string) error {
 				return ErrConnectionClosed
 			}
 			return nil
+		}
+		if d.Meter != nil {
+			d.Meter.Add(source, n)
 		}
 		d.thr.consume(n, d.stop)
 		d.mu.Lock()
@@ -422,7 +471,13 @@ func (d *Download) worker(id int, wg *sync.WaitGroup) {
 			return
 		}
 		d.mu.Unlock()
-		err := d.fetch(seg, fh, d.nextSource())
+		err := d.fetch(seg, fh, id, d.sourceFor(id))
+		if errors.Is(err, errSwitchSource) {
+			d.mu.Lock()
+			seg.owner = -1
+			d.mu.Unlock()
+			continue
+		}
 		if err != nil {
 			code := StatusCode(err)
 			var rns *RangeNotSupportedError
@@ -446,6 +501,8 @@ func (d *Download) worker(id int, wg *sync.WaitGroup) {
 				d.mu.Unlock()
 				return
 			}
+			// Try the next network on the retry.
+			d.shift[id]++
 			d.mu.Unlock()
 			failures++
 			if failures >= MaxWorkerFailures {
@@ -489,13 +546,7 @@ func (d *Download) Run() (bool, error) {
 	if d.Opener == nil {
 		d.Opener = DefaultOpener
 	}
-	var srcs []string
-	for _, s := range d.Sources {
-		if s != "" {
-			srcs = append(srcs, s)
-		}
-	}
-	d.Sources = srcs
+	d.shift = map[int]int{}
 	d.thr = &throttle{rate: d.BytesPerSecond, next: time.Now()}
 	d.stop = make(chan struct{})
 	d.maxActive = d.Connections

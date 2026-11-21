@@ -307,6 +307,11 @@ func (e *Engine) stream(t *Task, body io.Reader, path string, flag int, limit fl
 	lastTime := time.Now()
 	var sinceLast int64
 	buf := make([]byte, 64*1024)
+	// One connection on the OS's default network.
+	if Meter != nil {
+		Meter.Open("")
+		defer Meter.Close("")
+	}
 	for {
 		stopped := false
 		e.update(func() {
@@ -320,6 +325,9 @@ func (e *Engine) stream(t *Task, body io.Reader, path string, flag int, limit fl
 			return nil
 		}
 		n, rerr := body.Read(buf)
+		if n > 0 && Meter != nil {
+			Meter.Add("", n)
+		}
 		if n > 0 {
 			if _, err := f.Write(buf[:n]); err != nil {
 				return err
@@ -406,7 +414,11 @@ func (e *Engine) downloadSegmented(t *Task, url string, headers map[string]strin
 	if connections < 1 {
 		connections = 1
 	}
-	sources := transport.ParseSources(c.BindAddresses)
+	sourcesFunc := c.Sources
+	if sourcesFunc == nil {
+		fixed := transport.ParseSources(c.BindAddresses)
+		sourcesFunc = func() []string { return fixed }
+	}
 	e.mu.Lock()
 	path := t.FilePath
 	e.mu.Unlock()
@@ -452,7 +464,7 @@ func (e *Engine) downloadSegmented(t *Task, url string, headers map[string]strin
 				}
 			})
 		},
-		BytesPerSecond: e.bytesPerSecond(), Opener: opener, Sources: sources,
+		BytesPerSecond: e.bytesPerSecond(), Opener: opener, SourcesFunc: sourcesFunc, Meter: Meter,
 	}
 	finished, err := d.Run()
 	e.update(func() { t.Speed = 0 })

@@ -2,19 +2,23 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"time"
 
 	"gioui.org/app"
 
 	"silverspoon/internal/applog"
 	"silverspoon/internal/engine"
+	"silverspoon/internal/netmon"
 	"silverspoon/internal/platform"
 	"silverspoon/internal/solver"
 	"silverspoon/internal/store"
+	"silverspoon/internal/transport"
 	"silverspoon/internal/ui"
 )
 
@@ -46,13 +50,38 @@ func main() {
 
 	settings := store.LoadSettings()
 	sv := solver.New("", settings.CaptchaTimeout, settings.ShowSolverBrowser)
+
+	// Every network with internet (Ethernet, Wi-Fi, USB/phone tethering) is
+	// found and rescanned every few seconds, so one plugged in mid-download
+	// starts carrying connections, and traffic is measured per network.
+	nets := netmon.New()
+	nets.SetExcluded(settings.Strings(ui.KeyExcludedNet))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go nets.Run(ctx, 4*time.Second)
+	engine.Meter = nets
 	var gui *ui.App
 	eng := engine.New(store.LoadHistory(), func() engine.Config {
 		s := gui.Settings()
 		return engine.Config{MaxWorkers: s.MaxWorkers, MaxConnections: s.MaxConnections,
-			BindAddresses: s.BindAddresses, BandwidthLimit: s.BandwidthLimit, AutoRetry: s.AutoRetryErrors}
+			BindAddresses: s.BindAddresses, BandwidthLimit: s.BandwidthLimit, AutoRetry: s.AutoRetryErrors,
+			Sources: func() []string {
+				if s.Bool(ui.KeyAllNetworks, true) {
+					return nets.Usable()
+				}
+				// Manual list: skip addresses that no longer exist (a tether
+				// gets a new IP each time it reconnects).
+				var ok []string
+				for _, ip := range transport.ParseSources(s.BindAddresses) {
+					if nets.Present(ip) {
+						ok = append(ok, ip)
+					}
+				}
+				return ok
+			}}
 	}, sv)
 	gui = ui.New(eng, sv, settings)
+	gui.SetNetworks(nets)
 	eng.Start()
 
 	// An update's swap script waits for this marker to confirm the new build

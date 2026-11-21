@@ -434,3 +434,29 @@ func (s *Settings) SetBool(key string, v bool) {
 	s.Extra[key] = b
 	s.keyOrder = append(s.keyOrder, key)
 }
+
+// Strings reads an extra string-list setting, or nil when absent.
+func (s Settings) Strings(key string) []string {
+	raw, ok := s.Extra[key]
+	if !ok {
+		return nil
+	}
+	var v []string
+	if json.Unmarshal(raw, &v) != nil {
+		return nil
+	}
+	return v
+}
+
+// SetStrings stores an extra string-list setting.
+func (s *Settings) SetStrings(key string, v []string) {
+	if s.Extra == nil {
+		s.Extra = map[string]json.RawMessage{}
+	}
+	if v == nil {
+		v = []string{}
+	}
+	b, _ := json.Marshal(v)
+	s.Extra[key] = b
+	s.keyOrder = append(s.keyOrder, key)
+}
