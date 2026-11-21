@@ -36,10 +36,35 @@ type Adapter struct {
 	LinkMbps    uint64 // reported link speed, 0 when unknown
 }
 
+// State is how a network is doing.
+type State int
+
+const (
+	// StateOnline: the last internet check passed.
+	StateOnline State = iota
+	// StateReconnecting: one check failed, or the adapter vanished for a
+	// moment (a USB tether resetting). It keeps its connections while its
+	// address still exists.
+	StateReconnecting
+	// StateOffline: failed checks in a row, or gone for longer than the
+	// grace period.
+	StateOffline
+)
+
+// FailuresBeforeOffline is how many internet checks in a row must fail
+// before a network is treated as having no internet.
+const FailuresBeforeOffline = 2
+
+// MissingGrace is how long an adapter that disappeared (e.g. a tether
+// resetting) is still listed as reconnecting.
+const MissingGrace = 30 * time.Second
+
 // Net is an adapter plus live statistics, as the UI shows it.
 type Net struct {
 	Adapter
-	Online      bool    // reached the internet on the last probe
+	State       State
+	Online      bool    // usable for downloads (online, or reconnecting with its address present)
+	Missing     bool    // the adapter is briefly gone (its address can't be used)
 	Excluded    bool    // the user turned it off
 	Connections int     // open download connections leaving from it
 	BytesPerSec float64 // smoothed download rate
@@ -59,7 +84,9 @@ type counter struct {
 type Monitor struct {
 	mu        sync.Mutex
 	adapters  []Adapter
-	online    map[string]bool // by IP
+	fails     map[string]int       // consecutive failed checks, by adapter name
+	lastSeen  map[string]time.Time // by adapter name
+	known     map[string]Adapter   // last details of every adapter seen, by name
 	counters  map[string]*counter
 	excluded  map[string]bool // by adapter name
 	defaultIP string
@@ -68,12 +95,14 @@ type Monitor struct {
 	// Hooks for tests.
 	list  func() []Adapter
 	probe func(ip string) bool
+	now   func() time.Time
 }
 
 // New returns a monitor using the OS adapter list.
 func New() *Monitor {
-	return &Monitor{online: map[string]bool{}, counters: map[string]*counter{}, excluded: map[string]bool{},
-		list: listAdapters, probe: probeInternet}
+	return &Monitor{fails: map[string]int{}, lastSeen: map[string]time.Time{}, known: map[string]Adapter{},
+		counters: map[string]*counter{}, excluded: map[string]bool{},
+		list: listAdapters, probe: probeInternet, now: time.Now}
 }
 
 // SetExcluded sets the adapter names the user turned off.
@@ -119,28 +148,68 @@ func (m *Monitor) Run(ctx context.Context, scanEvery time.Duration) {
 	}
 }
 
-// Scan re-reads the adapters and probes which reach the internet. A newly
-// plugged-in tether shows up here and is used from the next request on.
+// Scan re-reads the adapters and checks which reach the internet. A newly
+// plugged-in tether shows up here and is used from the next request on. A
+// single failed check, or an adapter vanishing for a moment, only marks the
+// network as reconnecting; see State.
 func (m *Monitor) Scan() {
 	ads := m.list()
-	online := map[string]bool{}
+	ok := map[string]bool{}
 	var wg sync.WaitGroup
 	var omu sync.Mutex
 	for _, a := range ads {
 		wg.Add(1)
-		go func(ip string) {
+		go func(name, ip string) {
 			defer wg.Done()
-			ok := m.probe(ip)
+			r := m.probe(ip)
 			omu.Lock()
-			online[ip] = ok
+			ok[name] = r
 			omu.Unlock()
-		}(a.IP)
+		}(a.Name, a.IP)
 	}
 	wg.Wait()
 	def := defaultIP()
+	now := m.now()
 	m.mu.Lock()
-	m.adapters, m.online, m.defaultIP = ads, online, def
-	m.mu.Unlock()
+	defer m.mu.Unlock()
+	present := map[string]bool{}
+	for _, a := range ads {
+		present[a.Name] = true
+		m.known[a.Name] = a
+		m.lastSeen[a.Name] = now
+		if ok[a.Name] {
+			m.fails[a.Name] = 0
+		} else {
+			m.fails[a.Name]++
+		}
+	}
+	// Adapters that disappeared: keep them as reconnecting for a while, then
+	// forget them.
+	for name := range m.known {
+		if present[name] {
+			continue
+		}
+		m.fails[name]++
+		if now.Sub(m.lastSeen[name]) > MissingGrace {
+			delete(m.known, name)
+			delete(m.fails, name)
+			delete(m.lastSeen, name)
+		}
+	}
+	m.adapters, m.defaultIP = ads, def
+}
+
+// stateOf is the state of a known adapter. Lock held.
+func (m *Monitor) stateOf(name string, present bool) State {
+	switch {
+	case present && m.fails[name] == 0:
+		return StateOnline
+	case !present && m.now().Sub(m.lastSeen[name]) <= MissingGrace:
+		return StateReconnecting
+	case present && m.fails[name] < FailuresBeforeOffline:
+		return StateReconnecting
+	}
+	return StateOffline
 }
 
 func (m *Monitor) tick() {
@@ -210,7 +279,9 @@ func (m *Monitor) Usable() []string {
 	sort.Slice(ads, func(i, j int) bool { return ads[i].Name < ads[j].Name })
 	var out []string
 	for _, a := range ads {
-		if m.online[a.IP] && !m.excluded[a.Name] {
+		// A network that failed one check keeps its connections; only after
+		// FailuresBeforeOffline failures in a row do they move elsewhere.
+		if m.stateOf(a.Name, true) != StateOffline && !m.excluded[a.Name] {
 			out = append(out, a.IP)
 		}
 	}
@@ -233,20 +304,27 @@ func (m *Monitor) Present(ip string) bool {
 func (m *Monitor) Snapshot() []Net {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make([]Net, 0, len(m.adapters))
-	for _, a := range m.adapters {
-		n := Net{Adapter: a, Online: m.online[a.IP], Excluded: m.excluded[a.Name], Default: a.IP == m.defaultIP}
+	present := map[string]bool{}
+	out := make([]Net, 0, len(m.known))
+	add := func(a Adapter, isPresent bool) {
+		st := m.stateOf(a.Name, isPresent)
+		n := Net{Adapter: a, State: st, Missing: !isPresent, Excluded: m.excluded[a.Name],
+			Online: isPresent && st != StateOffline, Default: isPresent && a.IP == m.defaultIP}
 		if c := m.counters[a.IP]; c != nil {
 			n.Connections, n.BytesPerSec, n.TotalBytes = c.conns, c.rate, c.total
 		}
 		out = append(out, n)
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].Online != out[j].Online {
-			return out[i].Online
+	for _, a := range m.adapters {
+		present[a.Name] = true
+		add(a, true)
+	}
+	for name, a := range m.known {
+		if !present[name] && m.stateOf(name, false) == StateReconnecting {
+			add(a, false)
 		}
-		return out[i].Name < out[j].Name
-	})
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 

@@ -87,7 +87,7 @@ func (a *App) usingNetworks() (used, online int) {
 		return 0, 0
 	}
 	for _, n := range a.nets.Snapshot() {
-		if n.Online {
+		if n.State != netmon.StateOffline {
 			online++
 			if a.netUsed(n) {
 				used++
@@ -195,12 +195,20 @@ func (a *App) networkRow(gtx C, b *widget.Clickable, n netmon.Net, total float64
 			iconCol, nameCol = th.P.TextSubtle, th.P.TextMuted
 		}
 		ic := netIcon(n.Kind)
-		if !n.Online {
+		if n.State == netmon.StateOffline {
 			ic = icNetOff
+		}
+		reconnecting := n.State == netmon.StateReconnecting && !n.Excluded
+		if reconnecting {
+			iconCol, nameCol = th.P.Warning, th.P.Text
 		}
 		var status string
 		switch {
-		case !n.Online:
+		case reconnecting && n.Missing:
+			status = "Reconnecting… (adapter resetting)"
+		case reconnecting:
+			status = "Reconnecting… (" + n.IP + ")"
+		case n.State == netmon.StateOffline:
 			status = "No internet"
 		case !used && auto:
 			status = "Off · click to use"
@@ -229,7 +237,11 @@ func (a *App) networkRow(gtx C, b *widget.Clickable, n netmon.Net, total float64
 							if n.BytesPerSec > 0 && used {
 								col = th.P.Success
 							}
-							return th.Ellipsized(gtx, rateText(n.BytesPerSec), unit.Sp(12), col, font.SemiBold, text.End)
+							txt := rateText(n.BytesPerSec)
+							if reconnecting && n.BytesPerSec == 0 {
+								txt, col = "…", th.P.Warning
+							}
+							return th.Ellipsized(gtx, txt, unit.Sp(12), col, font.SemiBold, text.End)
 						}),
 					)
 				}),
