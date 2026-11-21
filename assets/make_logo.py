@@ -1,148 +1,161 @@
-"""Draws the SilverSpoon app icon: a silver spoon whose handle becomes a
-download arrow landing in a tray, on an indigo-violet squircle."""
+"""Draws the SilverSpoon logo concepts; the app uses D (minimal mark): concept_d.png -> SilverSpoon.png/.ico.
+icons (Raycast, Linear, Motrix, Downie): bold geometry, few colours."""
+import math
 import sys
-from PIL import Image, ImageDraw, ImageFilter, ImageChops
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
-S = 4  # supersampling
+S = 4
 N = 1024 * S
+
+
+def sc(v):
+    return int(v * S)
 
 
 def lerp(a, b, t):
     return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(len(a)))
 
 
-def gradient(size, c1, c2, direction="diag"):
+def linear(size, c1, c2, angle=135):
+    """Linear gradient at angle (degrees), via a rotated strip."""
     w, h = size
-    g = Image.new("RGBA", size)
-    px = g.load()
-    for y in range(h):
-        for x in range(0, w):
-            if direction == "diag":
-                t = (x / w * 0.45 + y / h * 0.55)
-            elif direction == "h":
-                t = x / w
-            else:
-                t = y / h
-            px[x, y] = lerp(c1, c2, t)
-    return g
+    d = int(math.hypot(w, h)) + 2
+    strip = Image.new("RGBA", (d, 1))
+    for i in range(d):
+        strip.putpixel((i, 0), lerp(c1, c2, i / (d - 1)))
+    g = strip.resize((d, d))
+    g = g.rotate(-angle + 90 - 90, resample=Image.BICUBIC)
+    left = (d - w) // 2
+    return g.crop((left, left, left + w, left + h))
 
 
-def grad_fast(size, stops, direction="v"):
-    """Linear gradient via a 1-pixel strip, resized (fast)."""
-    w, h = size
-    n = 256
-    strip = Image.new("RGBA", (1, n) if direction == "v" else (n, 1))
-    for i in range(n):
-        t = i / (n - 1)
-        for j in range(len(stops) - 1):
-            p0, c0 = stops[j]
-            p1, c1 = stops[j + 1]
-            if p0 <= t <= p1:
-                c = lerp(c0, c1, (t - p0) / (p1 - p0) if p1 > p0 else 0)
-                break
-        strip.putpixel((0, i) if direction == "v" else (i, 0), c)
-    return strip.resize(size, Image.BICUBIC)
-
-
-def mask_from(draw_fn):
+def tile_mask(pad=64, radius=228):
     m = Image.new("L", (N, N), 0)
-    draw_fn(ImageDraw.Draw(m))
+    ImageDraw.Draw(m).rounded_rectangle((sc(pad), sc(pad), sc(1024 - pad), sc(1024 - pad)), radius=sc(radius), fill=255)
     return m
 
 
-def sc(*v):
-    return [x * S for x in v]
+def stroke(d, pts, w, fill):
+    """Polyline with round caps and joins."""
+    pts = [(sc(x), sc(y)) for x, y in pts]
+    d.line(pts, fill=fill, width=sc(w), joint="curve")
+    r = sc(w) / 2
+    for x, y in pts:
+        d.ellipse((x - r, y - r, x + r, y + r), fill=fill)
 
 
-img = Image.new("RGBA", (N, N), (0, 0, 0, 0))
-
-# --- Tile -------------------------------------------------------------------
-pad, rad = 56, 232
-tile_mask = mask_from(lambda d: d.rounded_rectangle(sc(pad, pad, 1024 - pad, 1024 - pad), radius=rad * S, fill=255))
-tile = grad_fast((N, N), [(0, (99, 118, 255, 255)), (0.55, (110, 92, 246, 255)), (1, (139, 76, 226, 255))], "v")
-# diagonal tint: blend a horizontal gradient for depth
-tint = grad_fast((N, N), [(0, (255, 255, 255, 18)), (1, (0, 0, 0, 30))], "h")
-tile = Image.alpha_composite(tile, tint)
-# soft top glow
-glow = Image.new("RGBA", (N, N), (0, 0, 0, 0))
-ImageDraw.Draw(glow).rounded_rectangle(sc(pad, pad, 1024 - pad, 470), radius=rad * S, fill=(255, 255, 255, 34))
-glow = glow.filter(ImageFilter.GaussianBlur(90 * S))
-tile = Image.alpha_composite(tile, glow)
-img.paste(tile, (0, 0), tile_mask)
-
-# Thin inner border highlight.
-border = Image.new("RGBA", (N, N), (0, 0, 0, 0))
-ImageDraw.Draw(border).rounded_rectangle(sc(pad + 3, pad + 3, 1024 - pad - 3, 1024 - pad - 3), radius=(rad - 3) * S,
-                                          outline=(255, 255, 255, 60), width=4 * S)
-img = Image.alpha_composite(img, border)
-
-# --- Spoon + arrow + tray shape -------------------------------------------------
-cx = 512
+def finish(img):
+    return img.resize((1024, 1024), Image.LANCZOS)
 
 
-def shape(d, inset=0):
-    i = inset
-    # bowl
-    d.ellipse(sc(cx - 132 + i, 168 + i, cx + 132 - i, 498 - i), fill=255)
-    # neck/handle tapering down
-    d.polygon([tuple(sc(cx - 30 + i, 470)), tuple(sc(cx + 30 - i, 470)),
-               tuple(sc(cx + 40 - i, 640)), tuple(sc(cx - 40 + i, 640))], fill=255)
-    # arrow head
-    d.polygon([tuple(sc(cx - 128 + i * 2, 612 + i)), tuple(sc(cx + 128 - i * 2, 612 + i)),
-               tuple(sc(cx, 772 - i * 2))], fill=255)
-    # tray
-    d.rounded_rectangle(sc(cx - 232 + i, 812 + i, cx + 232 - i, 862 - i), radius=25 * S, fill=255)
-    d.rounded_rectangle(sc(cx - 232 + i, 720 + i, cx - 182 - i, 862 - i), radius=25 * S, fill=255)
-    d.rounded_rectangle(sc(cx + 182 + i, 720 + i, cx + 232 - i, 862 - i), radius=25 * S, fill=255)
+# A — Line glyph on a vivid gradient tile (Raycast / Linear).
+def concept_a():
+    img = Image.new("RGBA", (N, N), (0, 0, 0, 0))
+    tile = linear((N, N), (124, 92, 255, 255), (56, 140, 255, 255), 135)
+    img.paste(tile, (0, 0), tile_mask())
+    g = Image.new("L", (N, N), 0)
+    d = ImageDraw.Draw(g)
+    # Spoon bowl outline.
+    d.ellipse((sc(392), sc(196), sc(632), sc(456)), outline=255, width=sc(60))
+    # Handle into arrow, then tray.
+    stroke(d, [(512, 456), (512, 720)], 60, 255)
+    stroke(d, [(400, 612), (512, 724), (624, 612)], 60, 255)
+    stroke(d, [(300, 700), (300, 824), (724, 824), (724, 700)], 60, 255)
+    white = Image.new("RGBA", (N, N), (255, 255, 255, 255))
+    img.paste(white, (0, 0), g)
+    return finish(img)
 
 
-spoon_mask = mask_from(shape)
+# B — Solid spoon whose bowl holds a cut-out arrow (Downie / Transmit).
+def concept_b():
+    img = Image.new("RGBA", (N, N), (0, 0, 0, 0))
+    tile = linear((N, N), (24, 27, 36, 255), (12, 14, 20, 255), 160)
+    img.paste(tile, (0, 0), tile_mask())
+    # Spoon in a silver-to-white flat gradient.
+    m = Image.new("L", (N, N), 0)
+    d = ImageDraw.Draw(m)
+    d.ellipse((sc(332), sc(150), sc(692), sc(590)), fill=255)
+    d.rounded_rectangle((sc(474), sc(540), sc(550), sc(888)), radius=sc(38), fill=255)
+    # Arrow cut out of the bowl.
+    cut = Image.new("L", (N, N), 0)
+    dc = ImageDraw.Draw(cut)
+    dc.rounded_rectangle((sc(482), sc(250), sc(542), sc(420)), radius=sc(14), fill=255)
+    dc.polygon([(sc(400), sc(380)), (sc(624), sc(380)), (sc(512), sc(500))], fill=255)
+    m = Image.composite(Image.new("L", (N, N), 0), m, cut)
+    metal = linear((N, N), (255, 255, 255, 255), (168, 178, 198, 255), 120)
+    img.paste(metal, (0, 0), m)
+    # Accent glow under the bowl.
+    glow = Image.new("RGBA", (N, N), (124, 140, 255, 0))
+    ga = Image.new("L", (N, N), 0)
+    ImageDraw.Draw(ga).ellipse((sc(300), sc(560), sc(724), sc(700)), fill=120)
+    glow.putalpha(ga.filter(ImageFilter.GaussianBlur(sc(60))))
+    under = Image.new("RGBA", (N, N), (0, 0, 0, 0))
+    under.paste(glow, (0, 0), tile_mask())
+    img = Image.alpha_composite(under, img) if False else Image.alpha_composite(img, under)
+    img.paste(metal, (0, 0), m)
+    return finish(img)
 
-# Drop shadow.
-shadow = Image.new("RGBA", (N, N), (20, 10, 60, 0))
-sh_alpha = spoon_mask.filter(ImageFilter.GaussianBlur(18 * S)).point(lambda v: int(v * 0.55))
-shadow.putalpha(sh_alpha)
-shadow = ImageChops.offset(shadow, 0, 16 * S)
-img = Image.alpha_composite(img, shadow)
 
-# Silver body: vertical metallic gradient with a bright band.
-silver = grad_fast((N, N), [
-    (0.00, (255, 255, 255, 255)),
-    (0.22, (236, 240, 248, 255)),
-    (0.42, (196, 204, 220, 255)),
-    (0.55, (240, 243, 250, 255)),
-    (0.75, (186, 194, 212, 255)),
-    (1.00, (226, 231, 241, 255)),
-], "v")
-# horizontal shading for roundness
-side = grad_fast((N, N), [(0, (70, 60, 140, 70)), (0.45, (255, 255, 255, 0)), (0.6, (255, 255, 255, 0)), (1, (70, 60, 140, 80))], "h")
-silver = Image.alpha_composite(silver, side)
-layer = Image.new("RGBA", (N, N), (0, 0, 0, 0))
-layer.paste(silver, (0, 0), spoon_mask)
-img = Image.alpha_composite(img, layer)
+# C — Round badge, tilted spoon with speed lines (Motrix / IDM).
+def concept_c():
+    img = Image.new("RGBA", (N, N), (0, 0, 0, 0))
+    circ = Image.new("L", (N, N), 0)
+    ImageDraw.Draw(circ).ellipse((sc(72), sc(72), sc(952), sc(952)), fill=255)
+    bg = linear((N, N), (34, 211, 166, 255), (52, 120, 246, 255), 135)
+    img.paste(bg, (0, 0), circ)
+    m = Image.new("L", (N, N), 0)
+    d = ImageDraw.Draw(m)
+    d.ellipse((sc(392), sc(170), sc(632), sc(470)), fill=255)
+    d.rounded_rectangle((sc(486), sc(440), sc(538), sc(830)), radius=sc(26), fill=255)
+    # Speed lines behind the handle.
+    for dx, y0, y1 in ((-120, 520, 700), (-200, 560, 660), (120, 520, 700)):
+        pass
+    m = m.rotate(-38, resample=Image.BICUBIC, center=(N / 2 + sc(30), N / 2))
+    lines = Image.new("L", (N, N), 0)
+    dl = ImageDraw.Draw(lines)
+    for x0, x1, y in ((250, 400, 330), (200, 380, 420), (270, 410, 510)):
+        stroke(dl, [(x0, y), (x1, y)], 34, 200)
+    img.paste(Image.new("RGBA", (N, N), (255, 255, 255, 255)), (0, 0), lines)
+    img.paste(Image.new("RGBA", (N, N), (255, 255, 255, 255)), (0, 0), m)
+    return finish(img)
 
-# Bowl inner shading (the dip of the spoon) and a specular highlight.
-inner = Image.new("RGBA", (N, N), (0, 0, 0, 0))
-di = ImageDraw.Draw(inner)
-di.ellipse(sc(cx - 100, 200, cx + 100, 466), fill=(120, 110, 190, 70))
-inner = inner.filter(ImageFilter.GaussianBlur(10 * S))
-img = Image.alpha_composite(img, inner)
-spec = Image.new("RGBA", (N, N), (0, 0, 0, 0))
-# A thin crescent of light along the bowl's upper-left rim.
-ds = ImageDraw.Draw(spec)
-ds.arc(sc(cx - 112, 190, cx + 112, 476), start=150, end=250, fill=(255, 255, 255, 230), width=14 * S)
-spec = spec.filter(ImageFilter.GaussianBlur(5 * S))
-img = Image.alpha_composite(img, spec)
 
-# Crisp outline for definition at small sizes.
-edge = spoon_mask.filter(ImageFilter.FIND_EDGES).filter(ImageFilter.MaxFilter(3))
-outline = Image.new("RGBA", (N, N), (70, 58, 160, 0))
-outline.putalpha(edge.point(lambda v: int(v * 0.35)))
-img = Image.alpha_composite(img, outline)
+# D — Minimal mark: a white "droplet" spoon with the arrow as negative space,
+# on a single accent colour (Linear / Arc).
+def concept_d():
+    img = Image.new("RGBA", (N, N), (0, 0, 0, 0))
+    tile = linear((N, N), (99, 102, 241, 255), (79, 70, 229, 255), 150)
+    img.paste(tile, (0, 0), tile_mask())
+    m = Image.new("L", (N, N), 0)
+    d = ImageDraw.Draw(m)
+    d.ellipse((sc(300), sc(170), sc(724), sc(594)), fill=255)          # bowl
+    d.rounded_rectangle((sc(470), sc(560), sc(554), sc(870)), radius=sc(42), fill=255)  # handle
+    cut = Image.new("L", (N, N), 0)
+    dc = ImageDraw.Draw(cut)
+    stroke(dc, [(512, 268), (512, 470)], 64, 255)
+    stroke(dc, [(420, 392), (512, 484), (604, 392)], 64, 255)
+    m = Image.composite(Image.new("L", (N, N), 0), m, cut)
+    img.paste(Image.new("RGBA", (N, N), (255, 255, 255, 255)), (0, 0), m)
+    return finish(img)
 
-out = img.resize((1024, 1024), Image.LANCZOS)
-png, ico = sys.argv[1], sys.argv[2]
-out.save(png, optimize=True)
-out.save(ico, sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
-out.resize((256, 256), Image.LANCZOS).save(png.replace(".png", "_256.png"))
+
+out_dir = sys.argv[1]
+concepts = [("A  Line glyph", concept_a()), ("B  Silver on graphite", concept_b()),
+            ("C  Fast spoon", concept_c()), ("D  Minimal mark", concept_d())]
+sheet = Image.new("RGBA", (4 * 300 + 50, 420), (18, 20, 26, 255))
+try:
+    font = ImageFont.truetype("C:/Windows/Fonts/seguisb.ttf", 22)
+except OSError:
+    font = ImageFont.load_default()
+ds = ImageDraw.Draw(sheet)
+for i, (name, im) in enumerate(concepts):
+    im.save(f"{out_dir}/concept_{'abcd'[i]}.png")
+    x = 25 + i * 300
+    big = im.resize((240, 240), Image.LANCZOS)
+    sheet.paste(big, (x + 10, 30), big)
+    for j, s in enumerate((48, 32, 16)):
+        sm = im.resize((s, s), Image.LANCZOS)
+        sheet.paste(sm, (x + 40 + j * 70, 300 + (48 - s) // 2), sm)
+    ds.text((x + 10, 370), name, fill=(220, 224, 232), font=font)
+sheet.save(f"{out_dir}/concepts.png")
 print("ok")
