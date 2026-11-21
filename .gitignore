@@ -1,0 +1,3 @@
+dist/
+*.exe
+!assets/7z.exe
