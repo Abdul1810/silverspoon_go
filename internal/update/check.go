@@ -76,7 +76,7 @@ type Release struct {
 }
 
 type ghRelease struct {
-	TagName string `json:"tag_name"`
+	TagName string  `json:"tag_name"`
 	Body    *string `json:"body"`
 	Assets  []struct {
 		Name               string `json:"name"`
