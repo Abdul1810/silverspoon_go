@@ -170,8 +170,11 @@ func (a *App) Run(version string) error {
 	for {
 		switch e := a.w.Event().(type) {
 		case app.DestroyEvent:
+			engine.Log.Error(fmt.Sprintf("Window closed (err=%v)", e.Err))
 			a.shutdown()
 			return e.Err
+		default:
+			setWindowIcon(e)
 		case app.FrameEvent:
 			gtx := app.NewContext(&ops, e)
 			a.frame(gtx)

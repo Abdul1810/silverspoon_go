@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -178,3 +179,41 @@ func itoa(n int) string {
 }
 
 var procRtlMoveMemory = kernel32.NewProc("RtlMoveMemory")
+
+var (
+	procLoadImageW   = user32.NewProc("LoadImageW")
+	procPostMessageW = user32.NewProc("PostMessageW")
+	procGetSysMetric = user32.NewProc("GetSystemMetrics")
+)
+
+// SetWindowIcon sets the title-bar and taskbar icon from ICO bytes. The
+// file is cached in %TEMP% because LoadImage reads icons from disk.
+func SetWindowIcon(hwnd uintptr, ico []byte) {
+	path := filepath.Join(os.TempDir(), "silverspoon_icon.ico")
+	if b, err := os.ReadFile(path); err != nil || string(b) != string(ico) {
+		if os.WriteFile(path, ico, 0o644) != nil {
+			return
+		}
+	}
+	p, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return
+	}
+	const (
+		imageIcon      = 1
+		lrLoadFromFile = 0x10
+		wmSetIcon      = 0x80
+		smCxIcon       = 11
+		smCxSmIcon     = 49
+	)
+	for _, v := range []struct{ which, metric uintptr }{{1, smCxIcon}, {0, smCxSmIcon}} {
+		sz, _, _ := procGetSysMetric.Call(v.metric)
+		h, _, _ := procLoadImageW.Call(0, uintptr(unsafe.Pointer(p)), imageIcon, sz, sz, lrLoadFromFile)
+		if h != 0 {
+			// PostMessage, not SendMessage: this runs while Gio's window
+			// thread waits for the event loop, so a synchronous send would
+			// deadlock the two.
+			procPostMessageW.Call(hwnd, wmSetIcon, v.which, h)
+		}
+	}
+}

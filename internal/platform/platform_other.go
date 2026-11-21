@@ -93,3 +93,6 @@ func (l *Lock) Release() {
 		l.f.Close()
 	}
 }
+
+// SetWindowIcon is Windows-only; elsewhere the desktop entry supplies it.
+func SetWindowIcon(uintptr, []byte) {}
