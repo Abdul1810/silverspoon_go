@@ -100,3 +100,16 @@ func TestRealFilesRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestExtraBoolRoundTrip(t *testing.T) {
+	withDir(t)
+	s := LoadSettings()
+	if !s.Bool("start_immediately", true) {
+		t.Error("default not used")
+	}
+	s.SetBool("start_immediately", false)
+	SaveSettings(s)
+	if LoadSettings().Bool("start_immediately", true) {
+		t.Error("false not persisted")
+	}
+}

@@ -410,3 +410,27 @@ func SaveHistory(tasks []TaskRecord) error {
 	}
 	return writeJSON(HistoryPath(), tasks)
 }
+
+// Bool reads an extra boolean setting the Python app doesn't know about
+// (it keeps such keys untouched), or def when absent.
+func (s Settings) Bool(key string, def bool) bool {
+	raw, ok := s.Extra[key]
+	if !ok {
+		return def
+	}
+	var v bool
+	if json.Unmarshal(raw, &v) != nil {
+		return def
+	}
+	return v
+}
+
+// SetBool stores an extra boolean setting.
+func (s *Settings) SetBool(key string, v bool) {
+	if s.Extra == nil {
+		s.Extra = map[string]json.RawMessage{}
+	}
+	b, _ := json.Marshal(v)
+	s.Extra[key] = b
+	s.keyOrder = append(s.keyOrder, key)
+}

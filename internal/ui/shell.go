@@ -17,6 +17,7 @@ import (
 	"silverspoon/internal/engine"
 	"silverspoon/internal/providers"
 	"silverspoon/internal/scheduler"
+	"silverspoon/internal/store"
 )
 
 // Views in the sidebar. Every task is in exactly one of active, queued,
@@ -579,6 +580,8 @@ func (a *App) openAddSheet(initial string) {
 	links.SetText(initial)
 	var paste, imp, browse widget.Clickable
 	var startNow widget.Bool
+	// Checked by default; the choice is remembered.
+	startNow.Value = a.Settings().Bool("start_immediately", true)
 	folderEdited := false
 	lastSuggest := ""
 	focused := false
@@ -610,6 +613,9 @@ func (a *App) openAddSheet(initial string) {
 		saveDir := absDir(dir.Text())
 		a.lastSaveDir = saveDir
 		uids := a.eng.AddLinks(ls, saveDir, name)
+		if a.Settings().Bool("start_immediately", true) != startNow.Value {
+			a.saveSettings(func(st *store.Settings) { st.SetBool("start_immediately", startNow.Value) })
+		}
 		if startNow.Value {
 			a.eng.StartTasks(uids)
 		}
